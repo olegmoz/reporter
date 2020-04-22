@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/caarlos0/spin"
 	"github.com/google/go-github/v31/github"
 	"github.com/urfave/cli/v2"
 	"golang.org/x/oauth2"
@@ -127,7 +128,7 @@ func author(app *cli.Context) (string, error) {
 		}
 		author = user.GetLogin()
 	}
-	if author[0] == '@' {
+	if len(author) > 2 && author[0] == '@' {
 		author = author[1:]
 	}
 	if author != "" {
@@ -181,6 +182,11 @@ func cmdStat(app *cli.Context) error {
 
 func cmdRep(app *cli.Context) error {
 	now := time.Now()
+	fmt.Print("This is what was done today:\n")
+	s := spin.New("loading %s")
+	s.Set(spin.Spin1)
+	s.Start()
+	defer s.Stop()
 	repos, err := repos(app.Args().First())
 	if err != nil {
 		return err
@@ -189,7 +195,7 @@ func cmdRep(app *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("This is what was merged today:")
+	empty := true
 	for _, repo := range repos {
 		prs, _, err := client.PullRequests.List(ctx, repo.GetOwner().GetLogin(), repo.GetName(),
 			&github.PullRequestListOptions{State: "closed"})
@@ -204,11 +210,16 @@ func cmdRep(app *cli.Context) error {
 			if author != "" && author != strings.ToLower(pr.GetUser().GetLogin()) {
 				continue
 			}
+			s.Stop()
 			fmt.Printf(" - %s by @%s: %s\n",
 				pr.GetTitle(),
 				pr.GetUser().GetLogin(),
 				pr.GetHTMLURL())
+			empty = false
 		}
+	}
+	if empty {
+		fmt.Println(" - Nothing ;)")
 	}
 	return nil
 }
