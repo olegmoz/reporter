@@ -138,6 +138,11 @@ func author(app *cli.Context) (string, error) {
 }
 
 func cmdStat(app *cli.Context) error {
+	fmt.Println("Active pull requests:")
+	s := spin.New(" - %s")
+	s.Set(spin.Spin1)
+	s.Start()
+	defer s.Stop()
 	repos, err := repos(app.Args().First())
 	if err != nil {
 		return err
@@ -146,6 +151,8 @@ func cmdStat(app *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	fmt.Print(spin.ClearLine)
+	empty := true
 	for _, repo := range repos {
 		prs, _, err := client.PullRequests.List(ctx, repo.GetOwner().GetLogin(), repo.GetName(),
 			&github.PullRequestListOptions{State: "open", Sort: "updated"})
@@ -165,25 +172,42 @@ func cmdStat(app *cli.Context) error {
 			}
 			var assignee string
 			if a := pr.GetAssignee(); a != nil {
-				assignee = fmt.Sprintf("(a:%s)", a.GetLogin())
+				assignee = fmt.Sprintf("(a:@%s)", a.GetLogin())
 			} else {
 				assignee = "(a:0)"
 			}
-			fmt.Printf("PR[%s]: (%s) %s#%d by @%s %s %s\n",
+			fmt.Print(spin.ClearLine)
+			fmt.Printf(" - %s (%s) by @%s %s %s\n",
 				pr.GetTitle(),
 				state,
-				repo.GetFullName(), pr.GetNumber(),
 				pr.GetUser().GetLogin(), assignee,
 				pr.GetHTMLURL())
+			empty = false
 		}
+	}
+	if empty {
+		fmt.Print(spin.ClearLine)
+		fmt.Println(" - None ;)")
 	}
 	return nil
 }
 
 func cmdRep(app *cli.Context) error {
+	period := app.String("period")
+	if period == "" {
+		period = "daily"
+	}
+	if period != "daily" && period != "weekly" {
+		return fmt.Errorf("Unsupported period: %s", period)
+	}
+	daily := period == "daily"
+	if daily {
+		fmt.Print("This is what was done today:\n")
+	} else {
+		fmt.Print("This is what was done in last 7 days:\n")
+	}
 	now := time.Now()
-	fmt.Print("This is what was done today:\n")
-	s := spin.New("loading %s")
+	s := spin.New(" - %s")
 	s.Set(spin.Spin1)
 	s.Start()
 	defer s.Stop()
@@ -204,13 +228,19 @@ func cmdRep(app *cli.Context) error {
 		}
 		for _, pr := range prs {
 			closed := pr.GetClosedAt()
-			if compareDate(&now, &closed) != 0 {
-				continue
+			if daily {
+				if compareDate(&now, &closed) != 0 {
+					continue
+				}
+			} else {
+				if now.Add(-time.Hour * 24 * 7).After(closed) {
+					continue
+				}
 			}
 			if author != "" && author != strings.ToLower(pr.GetUser().GetLogin()) {
 				continue
 			}
-			s.Stop()
+			fmt.Print(spin.ClearLine)
 			fmt.Printf(" - %s by @%s: %s\n",
 				pr.GetTitle(),
 				pr.GetUser().GetLogin(),
@@ -219,6 +249,7 @@ func cmdRep(app *cli.Context) error {
 		}
 	}
 	if empty {
+		fmt.Print(spin.ClearLine)
 		fmt.Println(" - Nothing ;)")
 	}
 	return nil
