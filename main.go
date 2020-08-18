@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/caarlos0/spin"
@@ -11,7 +12,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"time"
 )
 
 // GitHub client
@@ -29,6 +29,10 @@ func main() {
 			&cli.StringFlag{
 				Name:  "token",
 				Usage: "GitHub API token with",
+			},
+			&cli.StringFlag{
+				Name:  "verbose",
+				Usage: "Verbose output",
 			},
 		},
 		Before: setup,
@@ -48,6 +52,28 @@ func main() {
 					&cli.StringFlag{
 						Name:  "date",
 						Usage: "date of report",
+					},
+					&cli.StringFlag{
+						Name:  "author",
+						Usage: "Filter by author",
+					},
+					&cli.BoolFlag{
+						Name:  "authors",
+						Usage: "Show PR authors",
+					},
+				},
+			},
+			&cli.Command{
+				Name:    "contrib",
+				Aliases: []string{"contr"},
+				Usage:   "Generate report for contributors statistics",
+				Action:  cmdContribs,
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "period",
+						Aliases: []string{"p"},
+						Value:   "daily",
+						Usage:   "Report period: either daily or weekly",
 					},
 					&cli.StringFlag{
 						Name:  "author",
@@ -176,10 +202,24 @@ func cmdStat(app *cli.Context) error {
 			} else {
 				assignee = "(a:0)"
 			}
+			revs, _, err := client.PullRequests.ListReviews(ctx, repo.GetOwner().GetLogin(), repo.GetName(),
+				pr.GetNumber(), nil)
+			if err != nil {
+				return err
+			}
+			revstat := "["
+			for _, rev := range revs {
+				if rev.GetState() == "DISMISSED" || rev.GetState() == "COMMENTED" {
+					continue
+				}
+				revstat += fmt.Sprintf("%s:%s,", rev.GetUser().GetLogin(), rev.GetState())
+			}
+			revstat += "]"
 			fmt.Print(spin.ClearLine)
-			fmt.Printf(" - %s (%s) by @%s %s %s\n",
+			fmt.Printf(" - %s (%s, %s) by @%s %s %s\n",
 				pr.GetTitle(),
 				state,
+				revstat,
 				pr.GetUser().GetLogin(), assignee,
 				pr.GetHTMLURL())
 			empty = false
@@ -193,20 +233,10 @@ func cmdStat(app *cli.Context) error {
 }
 
 func cmdRep(app *cli.Context) error {
-	period := app.String("period")
-	if period == "" {
-		period = "daily"
+	rng, err := ParseRange(app.String("period"))
+	if err != nil {
+		return err
 	}
-	if period != "daily" && period != "weekly" {
-		return fmt.Errorf("Unsupported period: %s", period)
-	}
-	daily := period == "daily"
-	if daily {
-		fmt.Print("This is what was done today:\n")
-	} else {
-		fmt.Print("This is what was done in last 7 days:\n")
-	}
-	now := time.Now()
 	s := spin.New(" - %s")
 	s.Set(spin.Spin1)
 	s.Start()
@@ -219,7 +249,9 @@ func cmdRep(app *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	authors := app.Bool("authors")
 	empty := true
+	var line bytes.Buffer
 	for _, repo := range repos {
 		prs, _, err := client.PullRequests.List(ctx, repo.GetOwner().GetLogin(), repo.GetName(),
 			&github.PullRequestListOptions{State: "closed"})
@@ -228,23 +260,27 @@ func cmdRep(app *cli.Context) error {
 		}
 		for _, pr := range prs {
 			closed := pr.GetClosedAt()
-			if daily {
-				if compareDate(&now, &closed) != 0 {
-					continue
-				}
-			} else {
-				if now.Add(-time.Hour * 24 * 7).After(closed) {
-					continue
-				}
+			// don't use pr.Merged since PR list doesn't include this field
+			if pr.MergedAt == nil {
+				continue
+			}
+			if !rng.Include(&closed) {
+				continue
 			}
 			if author != "" && author != strings.ToLower(pr.GetUser().GetLogin()) {
 				continue
 			}
+			line.WriteString(" - ")
+			line.WriteString(pr.GetTitle())
+			if authors {
+				line.WriteString(" @")
+				line.WriteString(pr.GetUser().GetLogin())
+			}
+			line.WriteString(": ")
+			line.WriteString(pr.GetHTMLURL())
 			fmt.Print(spin.ClearLine)
-			fmt.Printf(" - %s by @%s: %s\n",
-				pr.GetTitle(),
-				pr.GetUser().GetLogin(),
-				pr.GetHTMLURL())
+			fmt.Println(line.String())
+			line.Reset()
 			empty = false
 		}
 	}
@@ -255,26 +291,142 @@ func cmdRep(app *cli.Context) error {
 	return nil
 }
 
-func compareDate(left, right *time.Time) int {
-	ly, lm, ld := left.Date()
-	ry, rm, rd := right.Date()
-	if ly < ry {
-		return 1
+func cmdContribs(app *cli.Context) error {
+	rng, err := ParseRange(app.String("period"))
+	if err != nil {
+		return err
 	}
-	if ly > ry {
-		return -1
+	fmt.Println("Contributors statistics:")
+	verbose := app.Bool("verbose")
+	s := spin.New(" - %s")
+	if !verbose {
+		s.Set(spin.Spin1)
+		s.Start()
+		defer s.Stop()
 	}
-	if lm < rm {
-		return 1
+	repos, err := repos(app.Args().First())
+	if err != nil {
+		return err
 	}
-	if lm > rm {
-		return -1
+	author, err := author(app)
+	if err != nil {
+		return err
 	}
-	if ld < rd {
-		return 1
+	stats := usersStats(make(map[string]*userStats))
+	for _, repo := range repos {
+		prs, _, err := client.PullRequests.List(ctx, repo.GetOwner().GetLogin(), repo.GetName(),
+			&github.PullRequestListOptions{State: "closed"})
+		if err != nil {
+			return err
+		}
+		for _, pr := range prs {
+			if !rng.Include(pr.ClosedAt) {
+				continue
+			}
+			rvs, _, err := client.PullRequests.ListReviews(ctx, repo.GetOwner().GetLogin(),
+				repo.GetName(), pr.GetNumber(), nil)
+			if err != nil {
+				return err
+			}
+			// check reviews
+			reviewers := make(map[string]bool)
+			for _, rev := range rvs {
+				if rev.GetAuthorAssociation() != "MEMBER" {
+					continue
+				}
+				state := rev.GetState()
+				if state != "CHANGES_REQUESTED" && state != "APPROVED" {
+					continue
+				}
+				reviewers[rev.GetUser().GetLogin()] = true
+				if verbose && author == "" || (author != "" && author == rev.GetUser().GetLogin()) {
+					fmt.Printf("review by %s: %s\n", rev.GetUser().GetLogin(), rev.GetHTMLURL())
+				}
+			}
+			for reviewer := range reviewers {
+				if author == "" || (author != "" && author == reviewer) {
+					stats.review(reviewer)
+				}
+			}
+			// check PR merge
+			if pr.MergedAt != nil {
+				user := pr.GetUser().GetLogin()
+				if author == "" || (author != "" && author == user) {
+					stats.pull(user)
+				}
+				if verbose && author == "" || (author != "" && author == user) {
+					fmt.Printf("PR by %s: %s\n", user, pr.GetHTMLURL())
+				}
+			}
+		}
+
 	}
-	if ld > rd {
-		return -1
+	tickets, _, err := client.Issues.ListByOrg(ctx, app.Args().First(),
+		&github.IssueListOptions{Filter: "assigned", State: "closed"})
+	if err != nil {
+		return err
 	}
-	return 0
+	for _, ticket := range tickets {
+		if !rng.Include(ticket.ClosedAt) {
+			continue
+		}
+		if ticket.GetAssignee() == nil ||
+			ticket.GetAssignee().GetLogin() == ticket.GetUser().GetLogin() {
+			continue
+		}
+		user := ticket.GetUser().GetLogin()
+		if author == "" || (author != "" && author == user) {
+			stats.issue(user)
+		}
+		if verbose && author == "" || (author != "" && author == user) {
+			fmt.Printf("Issue by %s: %s\n", user, ticket.GetHTMLURL())
+		}
+
+	}
+	s.Stop()
+	fmt.Print(spin.ClearLine)
+	for name, stats := range stats {
+		fmt.Printf("%s - %s (%f)\n", name, stats, stats.sum())
+	}
+	return nil
+}
+
+type usersStats map[string]*userStats
+
+func (s usersStats) get(user string) *userStats {
+	res := s[user]
+	if res == nil {
+		res = new(userStats)
+		s[user] = res
+	}
+	return res
+}
+
+func (s usersStats) review(name string) {
+	us := s.get(name)
+	us.Reviews++
+}
+
+func (s usersStats) pull(name string) {
+	us := s.get(name)
+	us.Pulls++
+}
+
+func (s usersStats) issue(name string) {
+	us := s.get(name)
+	us.Issues++
+}
+
+type userStats struct {
+	Pulls   uint
+	Issues  uint
+	Reviews uint
+}
+
+func (s *userStats) String() string {
+	return fmt.Sprintf("pr=%d rev=%d tic=%d", s.Pulls, s.Reviews, s.Issues)
+}
+
+func (s *userStats) sum() float32 {
+	return float32(s.Pulls) + float32(s.Reviews)*0.5 + float32(s.Issues)*0.5
 }
