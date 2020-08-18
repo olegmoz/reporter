@@ -38,10 +38,29 @@ where actions is either `report` or `stats`,
 and source is either organization name (for full report over all repositories)
 or full repository coordinates (`user/repo`).
 
+## Daily and weekly reports
+
+Daily and weekly report shows all merged pull requests for specified period.
+
 To generate daily report run:
 ```bash
-./reporter report artipie
+./reporter report --period=daily artipie
 ```
+
+For weekly report:
+```bash
+./reporter report --period=weekly artipie
+```
+
+## Performance metrics
+
+For collecting performance metrics for period use:
+```bash
+./reporter contrib --period=weekly artipie
+```
+
+## Options
+
 To filter pull requests by user use `--author=<username>`,
 where `<username>` is either full GitHub username (ignore case) or `me` keyowrd for
 current user.
