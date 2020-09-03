@@ -186,6 +186,9 @@ func cmdStat(app *cli.Context) error {
 			return err
 		}
 		for _, pr := range prs {
+			if strings.HasPrefix(pr.GetUser().GetLogin(), "dependabot") {
+				continue
+			}
 			if author != "" && author != strings.ToLower(pr.GetUser().GetLogin()) {
 				continue
 			}
@@ -265,6 +268,9 @@ func cmdRep(app *cli.Context) error {
 				continue
 			}
 			if !rng.Include(&closed) {
+				continue
+			}
+			if strings.HasPrefix(pr.GetUser().GetLogin(), "dependabot") {
 				continue
 			}
 			if author != "" && author != strings.ToLower(pr.GetUser().GetLogin()) {
