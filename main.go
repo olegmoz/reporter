@@ -323,6 +323,9 @@ func cmdContribs(app *cli.Context) error {
 			if !rng.Include(pr.ClosedAt) {
 				continue
 			}
+			if strings.HasPrefix(pr.GetUser().GetLogin(), "dependabot") {
+				continue
+			}
 			rvs, _, err := client.PullRequests.ListReviews(ctx, repo.GetOwner().GetLogin(),
 				repo.GetName(), pr.GetNumber(), nil)
 			if err != nil {
