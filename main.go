@@ -278,7 +278,7 @@ func cmdRep(app *cli.Context) error {
 			}
 			line.WriteString(" - ")
 			line.WriteString(pr.GetTitle())
-			if authors {
+			if !authors {
 				line.WriteString(" @")
 				line.WriteString(pr.GetUser().GetLogin())
 			}
